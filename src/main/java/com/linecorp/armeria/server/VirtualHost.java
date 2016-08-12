@@ -23,11 +23,18 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Function;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+import com.github.kristofa.brave.internal.Nullable;
+
+import com.linecorp.armeria.common.Request;
+import com.linecorp.armeria.common.Response;
 
 import io.netty.handler.ssl.SslContext;
-import io.netty.util.DomainMappingBuilder;
 import io.netty.util.DomainNameMapping;
+import io.netty.util.DomainNameMappingBuilder;
 
 /**
  * A <a href="https://en.wikipedia.org/wiki/Virtual_hosting#Name-based">name-based virtual host</a>.
@@ -44,7 +51,7 @@ import io.netty.util.DomainNameMapping;
 public final class VirtualHost {
 
     private static final Pattern HOSTNAME_PATTERN = Pattern.compile(
-            "^(?:[-_a-zA-Z0-9]|[-_a-zA-Z0-9][-_\\.a-zA-Z0-9]*[-_a-zA-Z0-9])$");
+            "^(?:[-_a-zA-Z0-9]|[-_a-zA-Z0-9][-_.a-zA-Z0-9]*[-_a-zA-Z0-9])$");
 
     /** Initialized later by {@link ServerConfig} via {@link #setServerConfig(ServerConfig)}. */
     private ServerConfig serverConfig;
@@ -127,7 +134,7 @@ public final class VirtualHost {
         // Pretty convoluted way to validate but it's done only once and
         // we don't need to duplicate the pattern matching logic.
         final DomainNameMapping<Boolean> mapping =
-                new DomainMappingBuilder<>(Boolean.FALSE).add(hostnamePattern, Boolean.TRUE).build();
+                new DomainNameMappingBuilder<>(Boolean.FALSE).add(hostnamePattern, Boolean.TRUE).build();
 
         if (!mapping.map(defaultHostname)) {
             throw new IllegalArgumentException(
@@ -208,6 +215,22 @@ public final class VirtualHost {
      */
     public PathMapped<ServiceConfig> findServiceConfig(String path) {
         return serviceMapping.apply(path);
+    }
+
+    VirtualHost decorate(@Nullable Function<Service<Request, Response>, Service<Request, Response>> decorator) {
+        if (decorator == null) {
+            return this;
+        }
+
+        final List<ServiceConfig> services =
+                this.services.stream().map(cfg -> {
+                    final PathMapping pathMapping = cfg.pathMapping();
+                    final Service<Request, Response> service = decorator.apply(cfg.service());
+                    final String loggerName = cfg.loggerNameWithoutPrefix();
+                    return new ServiceConfig(pathMapping, service, loggerName);
+                }).collect(Collectors.toList());
+
+        return new VirtualHost(defaultHostname(), hostnamePattern(), sslContext(), services);
     }
 
     @Override
